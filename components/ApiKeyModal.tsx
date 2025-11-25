@@ -12,11 +12,18 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
   const [inputValue, setInputValue] = useState('');
   const [status, setStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [statusMsg, setStatusMsg] = useState('');
+  const [isVerified, setIsVerified] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       const stored = getApiKey();
-      if (stored) setInputValue(stored);
+      if (stored) {
+        setInputValue(stored);
+        // We do not assume stored keys are verified until tested again, 
+        // but we don't force a re-test just to close the modal.
+        // However, to SAVE (update), we require verification.
+        setIsVerified(false); 
+      }
       setStatus('idle');
       setStatusMsg('');
     }
@@ -24,10 +31,13 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     // Strictly replace any character that is not standard ASCII (0-127)
-    // This prevents "String contains non ISO-8859-1 code point" errors in headers
     const sanitized = e.target.value.replace(/[^\x00-\x7F]/g, "");
     setInputValue(sanitized);
+    
+    // RESET validation on any change. User must re-test.
     setStatus('idle');
+    setIsVerified(false);
+    setStatusMsg('');
   };
 
   const testConnection = async () => {
@@ -51,20 +61,23 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
       
       setStatus('success');
       setStatusMsg('Connection successful! Key is valid.');
+      setIsVerified(true); // Enable Save button
     } catch (error: any) {
       console.error(error);
       setStatus('error');
       setStatusMsg('Connection failed. Please check your key.');
+      setIsVerified(false);
     }
   };
 
   const handleSave = () => {
+    // Strict Guard: Prevent saving unless verified
+    if (!isVerified) return;
+
     const cleanKey = inputValue.trim();
     if (!cleanKey) return;
     
-    // Save to local storage
     saveApiKey(cleanKey);
-    // Update App state
     onSave(cleanKey);
     onClose();
   };
@@ -122,7 +135,8 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
             </button>
             <button 
               onClick={handleSave}
-              disabled={status === 'testing' || !inputValue}
+              // STRICT REQUIREMENT: Button disabled unless verified
+              disabled={status === 'testing' || !isVerified}
               className="flex-1 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg"
             >
               Save & Close

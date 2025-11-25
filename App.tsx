@@ -1,7 +1,10 @@
+
 import React, { useState, useCallback, useEffect } from 'react';
 import { Board } from './components/Board';
+import { ApiKeyModal } from './components/ApiKeyModal';
 import { checkWin, getCoords } from './utils/gameLogic';
 import { getGeminiMove } from './utils/aiLogic';
+import { getApiKey } from './utils/secureStorage';
 import { Player, GameState } from './types';
 import { BOARD_SIZE, TURN_TIME_LIMIT } from './constants';
 
@@ -24,7 +27,19 @@ const App: React.FC = () => {
     [Player.White]: 0,
     [Player.None]: 0
   });
+
+  // API Key State
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
+  const [apiKey, setApiKey] = useState<string>('');
   
+  // Load API Key on Mount
+  useEffect(() => {
+    const storedKey = getApiKey();
+    if (storedKey) {
+      setApiKey(storedKey);
+    }
+  }, []);
+
   // Core logic to apply a move
   const applyMove = useCallback((index: number) => {
     setGameState((prevState) => {
@@ -134,7 +149,7 @@ const App: React.FC = () => {
 
         if (!isMounted) return;
 
-        // Re-check guards after delay (in case of reset or fast state changes)
+        // Re-check guards after delay
         if (!gameState.gameActive || gameState.currentPlayer !== Player.White) return;
 
         console.log("AI Turn Starting... Board State:", gameState.board);
@@ -142,7 +157,6 @@ const App: React.FC = () => {
         setIsAiThinking(true);
         
         // PERFORMANCE FIX: Yield to main thread to allow "Thinking..." UI to paint 
-        // before blocking CPU with Minimax calculation.
         await new Promise(resolve => {
             renderYieldTimer = setTimeout(resolve, 50);
         });
@@ -153,8 +167,8 @@ const App: React.FC = () => {
           const lastMoveCoords = lastMoveIndex !== null ? getCoords(lastMoveIndex) : null;
           
           // Calculate Move (Synchronous CPU intensive task)
-          // Using process.env.API_KEY as required by strict guidelines
-          const move = await getGeminiMove(gameState.board, lastMoveCoords, process.env.API_KEY || '');
+          // Pass the user-configured apiKey
+          const move = await getGeminiMove(gameState.board, lastMoveCoords, apiKey);
           console.log("AI Move Calculation Finished. Result:", move);
           
           if (isMounted) {
@@ -170,7 +184,7 @@ const App: React.FC = () => {
               }
             }
 
-            // Fallback: If AI returned null or invalid move, pick a random valid empty spot
+            // Fallback for valid logic failure (not auth failure)
             if (index === -1) {
               console.warn("Using random fallback for AI move.");
               const emptyIndices = gameState.board
@@ -188,9 +202,22 @@ const App: React.FC = () => {
                applyMove(index);
             }
           }
-        } catch (e) {
-          console.error("AI Execution failed completely", e);
-          // Fallback on crash
+        } catch (e: any) {
+          console.error("AI Execution failed", e);
+          
+          // CRITICAL SECURITY HANDLING
+          // If the error is due to missing credentials, STOP execution.
+          // Do NOT trigger the random fallback.
+          if (e.message && e.message.includes("SECURITY_ERR_AUTH_REQUIRED")) {
+             if (isMounted) {
+               setIsAiThinking(false);
+               setIsApiKeyModalOpen(true);
+               // We do NOT call applyMove here, effectively pausing the game until key is provided.
+             }
+             return;
+          }
+
+          // Fallback only on non-security crashes
            if (isMounted) {
               const emptyIndices = gameState.board
                 .map((cell, idx) => cell === Player.None ? idx : -1)
@@ -216,7 +243,7 @@ const App: React.FC = () => {
         clearTimeout(turnDelayTimer);
         clearTimeout(renderYieldTimer);
     };
-  }, [isAiMode, gameState.gameActive, gameState.currentPlayer, gameState.board, lastMoveIndex, applyMove]);
+  }, [isAiMode, gameState.gameActive, gameState.currentPlayer, gameState.board, lastMoveIndex, applyMove, apiKey]);
 
   const resetGame = () => {
     setGameState(INITIAL_STATE);
@@ -228,8 +255,6 @@ const App: React.FC = () => {
   const toggleMode = () => {
     setIsAiMode(!isAiMode);
     resetGame();
-    // Reset scores when changing mode? User said "when leaving screen", so persistent during session is usually preferred.
-    // We will keep scores during session until reload.
     setScores({ [Player.Black]: 0, [Player.White]: 0, [Player.None]: 0 });
   };
 
@@ -238,6 +263,15 @@ const App: React.FC = () => {
       <div className="game-container flex flex-col items-center gap-6 w-full max-w-[640px] p-4">
         
         <header className="text-center relative w-full flex justify-center items-center mb-2">
+          {/* API Key Settings Button */}
+          <button 
+            onClick={() => setIsApiKeyModalOpen(true)}
+            className={`absolute right-0 top-1/2 transform -translate-y-1/2 p-2 rounded-full transition-all ${!apiKey ? 'text-red-500 bg-red-50 animate-pulse ring-2 ring-red-200' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}`}
+            title={!apiKey ? "API Key Required!" : "Configure API Key"}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+
           <div className="flex flex-col items-center">
             <h1 className="text-5xl font-extrabold text-slate-800 tracking-tight mb-2">Omok</h1>
             <p className="subtitle text-slate-500 text-lg font-medium tracking-wide uppercase">Classic Strategy Game</p>
@@ -346,6 +380,12 @@ const App: React.FC = () => {
           </button>
         </div>
       </div>
+
+      <ApiKeyModal 
+        isOpen={isApiKeyModalOpen} 
+        onClose={() => setIsApiKeyModalOpen(false)}
+        onSave={setApiKey}
+      />
     </div>
   );
 };
