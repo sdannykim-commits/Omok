@@ -1,10 +1,7 @@
-
 import React, { useState, useCallback, useEffect } from 'react';
 import { Board } from './components/Board';
-import { ApiKeyModal } from './components/ApiKeyModal';
 import { checkWin, getCoords } from './utils/gameLogic';
 import { getGeminiMove } from './utils/aiLogic';
-import { getApiKey } from './utils/secureStorage';
 import { Player, GameState } from './types';
 import { BOARD_SIZE, TURN_TIME_LIMIT } from './constants';
 
@@ -22,20 +19,16 @@ const App: React.FC = () => {
   const [isAiMode, setIsAiMode] = useState<boolean>(false);
   const [isAiThinking, setIsAiThinking] = useState<boolean>(false);
   const [timeLeft, setTimeLeft] = useState<number>(TURN_TIME_LIMIT);
+  const [scores, setScores] = useState<{ [key in Player]: number }>({
+    [Player.Black]: 0,
+    [Player.White]: 0,
+    [Player.None]: 0
+  });
   
-  // API Key State
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [isKeyModalOpen, setIsKeyModalOpen] = useState<boolean>(false);
-
-  // Load key on mount
-  useEffect(() => {
-    const storedKey = getApiKey();
-    if (storedKey) setApiKey(storedKey);
-  }, []);
-
   // Core logic to apply a move
   const applyMove = useCallback((index: number) => {
     setGameState((prevState) => {
+      // Guard: Double check valid move in state update
       if (!prevState.gameActive || prevState.board[index] !== Player.None) {
         return prevState;
       }
@@ -58,7 +51,7 @@ const App: React.FC = () => {
 
       return {
         board: newBoard,
-        currentPlayer: nextPlayer,
+        currentPlayer: nextPlayer, // Step 2: Update state to explicitly indicate next turn
         winner,
         winningLine,
         gameActive,
@@ -68,20 +61,33 @@ const App: React.FC = () => {
     setTimeLeft(TURN_TIME_LIMIT); // Reset timer on move
   }, []);
 
+  // Handle Score Update
+  useEffect(() => {
+    if (gameState.winner) {
+      setScores(prev => ({
+        ...prev,
+        [gameState.winner!]: prev[gameState.winner!] + 1
+      }));
+    }
+  }, [gameState.winner]);
+
   // Handle Timeout
   const handleTimeout = useCallback(() => {
-    setGameState((prev) => ({
-      ...prev,
-      gameActive: false,
-      winner: prev.currentPlayer === Player.Black ? Player.White : Player.Black, // Opponent wins
-    }));
+    setGameState((prev) => {
+      const winner = prev.currentPlayer === Player.Black ? Player.White : Player.Black;
+      return {
+        ...prev,
+        gameActive: false,
+        winner: winner, 
+      };
+    });
   }, []);
 
   // Timer Countdown Effect
   useEffect(() => {
     if (!gameState.gameActive || gameState.winner) return;
 
-    // Timer now runs even during AI turn to enforce the 10s limit
+    // Timer runs to enforce limits
     const timerId = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
@@ -98,38 +104,58 @@ const App: React.FC = () => {
 
   // Handle human clicks
   const handleCellClick = useCallback((index: number) => {
-    if (isAiMode && gameState.currentPlayer === Player.White) return;
+    // Guard: Strict prevention of interaction during AI turn or thinking state
+    if (isAiMode && (gameState.currentPlayer === Player.White || isAiThinking)) return;
     
     if (!gameState.gameActive || gameState.board[index] !== Player.None) {
       return;
     }
 
+    // Step 1: Validate and place Player's stone
     applyMove(index);
-  }, [gameState.gameActive, gameState.board, gameState.currentPlayer, isAiMode, applyMove]);
+  }, [gameState.gameActive, gameState.board, gameState.currentPlayer, isAiMode, isAiThinking, applyMove]);
 
   // Handle AI Turn
   useEffect(() => {
     let isMounted = true;
+    let turnDelayTimer: ReturnType<typeof setTimeout>;
+    let renderYieldTimer: ReturnType<typeof setTimeout>;
 
     const executeAiTurn = async () => {
-      // Logic checks: AI Mode ON, Game Active, Current Player is White (AI), and not already thinking
+      // Step 3: AI Move Guard
+      // Check strict conditions: AI Mode ON, Game Active, Current Player is White (AI), and NOT already thinking
       if (isAiMode && gameState.gameActive && gameState.currentPlayer === Player.White && !isAiThinking) {
-        if (!apiKey) {
-          setIsKeyModalOpen(true);
-          return;
-        }
+        
+        // VISUAL FIX: Introduce a delay to ensure the Player's move is fully rendered 
+        // and prevent the "simultaneous move" effect.
+        await new Promise(resolve => {
+            turnDelayTimer = setTimeout(resolve, 600); 
+        });
+
+        if (!isMounted) return;
+
+        // Re-check guards after delay (in case of reset or fast state changes)
+        if (!gameState.gameActive || gameState.currentPlayer !== Player.White) return;
+
+        console.log("AI Turn Starting... Board State:", gameState.board);
 
         setIsAiThinking(true);
         
-        // Small delay to let UI render the thinking state, but kept short
-        await new Promise(resolve => setTimeout(resolve, 100));
-        if (!isMounted) return;
+        // PERFORMANCE FIX: Yield to main thread to allow "Thinking..." UI to paint 
+        // before blocking CPU with Minimax calculation.
+        await new Promise(resolve => {
+            renderYieldTimer = setTimeout(resolve, 50);
+        });
 
-        const lastMoveCoords = lastMoveIndex !== null ? getCoords(lastMoveIndex) : null;
+        if (!isMounted) return;
         
         try {
-          // Attempt to get move from Gemini
-          const move = await getGeminiMove(gameState.board, lastMoveCoords, apiKey);
+          const lastMoveCoords = lastMoveIndex !== null ? getCoords(lastMoveIndex) : null;
+          
+          // Calculate Move (Synchronous CPU intensive task)
+          // Using process.env.API_KEY as required by strict guidelines
+          const move = await getGeminiMove(gameState.board, lastMoveCoords, process.env.API_KEY || '');
+          console.log("AI Move Calculation Finished. Result:", move);
           
           if (isMounted) {
             let index = -1;
@@ -139,12 +165,14 @@ const App: React.FC = () => {
               const aiIndex = move.row * BOARD_SIZE + move.col;
               if (aiIndex >= 0 && aiIndex < BOARD_SIZE * BOARD_SIZE && gameState.board[aiIndex] === Player.None) {
                 index = aiIndex;
+              } else {
+                console.warn("AI returned occupied or out-of-bounds move:", move);
               }
             }
 
             // Fallback: If AI returned null or invalid move, pick a random valid empty spot
             if (index === -1) {
-              console.warn("AI returned invalid/null move. Using random fallback.");
+              console.warn("Using random fallback for AI move.");
               const emptyIndices = gameState.board
                 .map((cell, idx) => cell === Player.None ? idx : -1)
                 .filter(idx => idx !== -1);
@@ -155,7 +183,7 @@ const App: React.FC = () => {
               }
             }
 
-            // Apply the move if we found a valid index
+            // Step 4: Final Transition - Apply AI move and return turn to Player
             if (index !== -1) {
                applyMove(index);
             }
@@ -173,15 +201,22 @@ const App: React.FC = () => {
                }
            }
         } finally {
-          if (isMounted) setIsAiThinking(false);
+          if (isMounted) {
+             setIsAiThinking(false);
+             console.log("AI Turn Phase Complete.");
+          }
         }
       }
     };
 
     executeAiTurn();
 
-    return () => { isMounted = false; };
-  }, [isAiMode, gameState.gameActive, gameState.currentPlayer, gameState.board, lastMoveIndex, isAiThinking, applyMove, apiKey]);
+    return () => { 
+        isMounted = false; 
+        clearTimeout(turnDelayTimer);
+        clearTimeout(renderYieldTimer);
+    };
+  }, [isAiMode, gameState.gameActive, gameState.currentPlayer, gameState.board, lastMoveIndex, applyMove]);
 
   const resetGame = () => {
     setGameState(INITIAL_STATE);
@@ -191,12 +226,11 @@ const App: React.FC = () => {
   };
 
   const toggleMode = () => {
-    if (!isAiMode && !apiKey) {
-      setIsKeyModalOpen(true);
-      return;
-    }
     setIsAiMode(!isAiMode);
     resetGame();
+    // Reset scores when changing mode? User said "when leaving screen", so persistent during session is usually preferred.
+    // We will keep scores during session until reload.
+    setScores({ [Player.Black]: 0, [Player.White]: 0, [Player.None]: 0 });
   };
 
   return (
@@ -208,17 +242,24 @@ const App: React.FC = () => {
             <h1 className="text-5xl font-extrabold text-slate-800 tracking-tight mb-2">Omok</h1>
             <p className="subtitle text-slate-500 text-lg font-medium tracking-wide uppercase">Classic Strategy Game</p>
           </div>
-          
-          <div className="absolute top-2 right-0 flex gap-2">
-             <button 
-              onClick={() => setIsKeyModalOpen(true)}
-              className="bg-white p-2 rounded-full shadow-md text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors border border-slate-200"
-              title="Configure API Key"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
-            </button>
-          </div>
         </header>
+
+        {/* Scoreboard */}
+        <div className="flex justify-between w-full max-w-[400px] animate-pop-in">
+          <div className="flex flex-col items-center justify-center p-3 bg-slate-800 text-white rounded-xl shadow-lg w-32 border-2 border-slate-700">
+            <span className="text-xs uppercase tracking-wider opacity-80 mb-1">Black</span>
+            <span className="text-4xl font-bold">{scores[Player.Black]}</span>
+          </div>
+          
+          <div className="flex items-center justify-center text-slate-400 font-bold text-xl px-2">
+            VS
+          </div>
+
+          <div className="flex flex-col items-center justify-center p-3 bg-white text-slate-800 rounded-xl shadow-lg w-32 border-2 border-slate-200">
+            <span className="text-xs uppercase tracking-wider opacity-60 mb-1">White</span>
+            <span className="text-4xl font-bold">{scores[Player.White]}</span>
+          </div>
+        </div>
 
         <div className="status-bar w-full flex flex-col items-center gap-4">
            {/* Mode Toggle */}
@@ -305,18 +346,6 @@ const App: React.FC = () => {
           </button>
         </div>
       </div>
-      
-      <ApiKeyModal 
-        isOpen={isKeyModalOpen} 
-        onClose={() => setIsKeyModalOpen(false)} 
-        onSave={(key) => {
-          setApiKey(key);
-          if (!isAiMode) {
-             setIsAiMode(true);
-             resetGame();
-          }
-        }}
-      />
     </div>
   );
 };

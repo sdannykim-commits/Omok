@@ -13,7 +13,13 @@ const xorCipher = (text: string): string => {
 
 export const saveApiKey = (apiKey: string): void => {
   try {
-    const encrypted = btoa(xorCipher(apiKey));
+    const cleanKey = apiKey.trim();
+    // Validate ascii to avoid btoa errors
+    if (/[^\x00-\x7F]/.test(cleanKey)) {
+        console.error("API Key contains invalid characters");
+        return;
+    }
+    const encrypted = btoa(xorCipher(cleanKey));
     localStorage.setItem(STORAGE_KEY, encrypted);
   } catch (e) {
     console.error("Failed to save API key", e);
@@ -24,9 +30,23 @@ export const getApiKey = (): string | null => {
   try {
     const encrypted = localStorage.getItem(STORAGE_KEY);
     if (!encrypted) return null;
-    return xorCipher(atob(encrypted));
+    
+    const decrypted = xorCipher(atob(encrypted));
+    
+    // Safety Check: API Keys should be printable ASCII characters only.
+    // If the decrypted string has weird control chars or high-bit chars, storage is likely corrupt.
+    // \x20-\x7E covers standard printable characters (space to ~).
+    if (/[^\x20-\x7E]/.test(decrypted)) {
+       console.warn("Detected corrupt API key in storage. Clearing...");
+       localStorage.removeItem(STORAGE_KEY);
+       return null;
+    }
+    
+    return decrypted;
   } catch (e) {
     console.error("Failed to retrieve API key", e);
+    // If we can't decode it, it's garbage. Clear it.
+    localStorage.removeItem(STORAGE_KEY);
     return null;
   }
 };

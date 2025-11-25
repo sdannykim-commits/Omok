@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import { saveApiKey, getApiKey } from '../utils/secureStorage';
@@ -23,8 +22,17 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
     }
   }, [isOpen]);
 
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Strictly replace any character that is not standard ASCII (0-127)
+    // This prevents "String contains non ISO-8859-1 code point" errors in headers
+    const sanitized = e.target.value.replace(/[^\x00-\x7F]/g, "");
+    setInputValue(sanitized);
+    setStatus('idle');
+  };
+
   const testConnection = async () => {
-    if (!inputValue.trim()) {
+    const cleanKey = inputValue.trim();
+    if (!cleanKey) {
       setStatus('error');
       setStatusMsg('Please enter an API Key.');
       return;
@@ -34,7 +42,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
     setStatusMsg('Testing connection to Gemini...');
 
     try {
-      const ai = new GoogleGenAI({ apiKey: inputValue });
+      const ai = new GoogleGenAI({ apiKey: cleanKey });
       // Lightweight test call
       await ai.models.generateContent({
         model: 'gemini-2.5-flash',
@@ -51,9 +59,13 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
   };
 
   const handleSave = () => {
-    if (!inputValue.trim()) return;
-    saveApiKey(inputValue);
-    onSave(inputValue);
+    const cleanKey = inputValue.trim();
+    if (!cleanKey) return;
+    
+    // Save to local storage
+    saveApiKey(cleanKey);
+    // Update App state
+    onSave(cleanKey);
     onClose();
   };
 
@@ -78,10 +90,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
             <input 
               type="password" 
               value={inputValue}
-              onChange={(e) => {
-                setInputValue(e.target.value);
-                setStatus('idle');
-              }}
+              onChange={handleInputChange}
               placeholder="AIzaSy..."
               className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all font-mono text-sm"
             />
