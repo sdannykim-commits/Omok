@@ -1,5 +1,7 @@
+
 export const BOARD_SIZE = 15; // Standard Gomoku size (15x15 or 19x19)
 export const WIN_LENGTH = 5;
+export const TURN_TIME_LIMIT = 10; // Seconds per turn
 
 export const DIRECTIONS = [
   [0, 1],   // Horizontal

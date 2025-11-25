@@ -1,24 +1,32 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { BOARD_SIZE } from "../constants";
 import { Player } from "../types";
 
-// Initialize Gemini AI
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+export const getGeminiMove = async (
+  board: Player[], 
+  lastMove: {row: number, col: number} | null,
+  apiKey: string
+): Promise<{ row: number; col: number } | null> => {
+  if (!apiKey) {
+    throw new Error("API Key is missing");
+  }
 
-export const getGeminiMove = async (board: Player[], lastMove: {row: number, col: number} | null): Promise<{ row: number; col: number } | null> => {
+  const ai = new GoogleGenAI({ apiKey });
+
   try {
     // Create a visual representation of the board for the model
-    // We use a coordinate system to help the LLM understand the grid
-    let boardVisual = "   0 1 2 3 4 5 6 7 8 9 0 1 2 3 4\n";
+    // Using 00-14 for clearer column alignment
+    let boardVisual = "   00 01 02 03 04 05 06 07 08 09 10 11 12 13 14\n";
     for (let r = 0; r < BOARD_SIZE; r++) {
-      boardVisual += `${r.toString().padStart(2, ' ')} `;
+      boardVisual += `${r.toString().padStart(2, '0')} `;
       for (let c = 0; c < BOARD_SIZE; c++) {
         const index = r * BOARD_SIZE + c;
         const cell = board[index];
-        let symbol = ".";
-        if (cell === Player.Black) symbol = "X"; // Black
-        if (cell === Player.White) symbol = "O"; // White
-        boardVisual += `${symbol} `;
+        let symbol = ". ";
+        if (cell === Player.Black) symbol = "X "; // Black
+        if (cell === Player.White) symbol = "O "; // White
+        boardVisual += symbol + " ";
       }
       boardVisual += "\n";
     }
@@ -56,14 +64,17 @@ export const getGeminiMove = async (board: Player[], lastMove: {row: number, col
           },
           required: ["row", "col"],
         },
-        temperature: 0.4, // Lower temperature for more consistent logic
+        temperature: 0.2, // Lower temperature for more deterministic/strategic play
+        thinkingConfig: { thinkingBudget: 0 }, // Disable thinking for speed
       },
     });
 
     const text = response.text;
     if (!text) return null;
     
-    const move = JSON.parse(text);
+    // Clean up potential markdown formatting just in case
+    const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    const move = JSON.parse(cleanText);
     return move;
   } catch (error) {
     console.error("Error getting AI move:", error);
