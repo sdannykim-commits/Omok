@@ -1,0 +1,5 @@
+{
+  "name": "Omok Strategy Game",
+  "description": "A classic 15x15 Gomoku (Omok) strategy game where players alternate turns placing black and white stones to get five in a row.",
+  "requestFramePermissions": []
+}
